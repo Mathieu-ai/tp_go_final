@@ -38,24 +38,32 @@ User Request → API Handler → Link Service → Repository → Database
    - Multiple URLs: `{"long_urls": ["https://example.com", "https://google.com"]}`
    - Handled by `CreateShortLinkHandler()` in `internal/api/handlers.go`
 
-2. **Validation**
-   - Gin binding validates URL format using `binding:"omitempty,url"` for single URL
-   - Multiple URLs use `binding:"omitempty,dive,url"` to validate each URL in array
-   - Request body parsed into `CreateLinkRequest` struct
+2. **CLI Request** (`./url-shortener create`)
+   - Single URL: `--url="https://example.com"`
+   - Multiple URLs as JSON: `--url='["https://example.com", "https://google.com"]'`
+   - Multiple URLs with single quotes: `--url="['https://example.com','https://google.com']"`
+   - Handled by `CreateCmd` in `cmd/cli/create.go` with flexible `parseURLFlag()` function
 
-3. **Service Layer Processing**
+3. **Validation**
+   - API: Gin binding validates URL format using `binding:"omitempty,url"` for single URL
+   - API: Multiple URLs use `binding:"omitempty,dive,url"` to validate each URL in array
+   - CLI: `url.ParseRequestURI()` validates each parsed URL before processing
+   - Request body parsed into `CreateLinkRequest` struct (API) or parsed by `parseURLFlag()` (CLI)
+
+4. **Service Layer Processing**
    - Single URL: `linkService.CreateLink(req.LongURL)` called once
    - Multiple URLs: `linkService.CreateLink()` called for each URL in loop
    - `GenerateShortCode(6)` creates cryptographically secure random code for each
    - Collision detection with retry logic (max 5 attempts per URL)
 
-4. **Database Storage**
+5. **Database Storage**
    - Repository creates `Link` model with unique short code for each URL
    - GORM persists each link to SQLite database
 
-5. **Response**
-   - Single URL: Returns JSON with `short_code`, `long_url`, and `full_short_url`
-   - Multiple URLs: Returns array of results with summary statistics
+6. **Response**
+   - API Single URL: Returns JSON with `short_code`, `long_url`, and `full_short_url`
+   - API Multiple URLs: Returns array of results with summary statistics
+   - CLI: Displays formatted output with success/failure status for each URL
 
 ### Key Methods Called
 
@@ -63,8 +71,11 @@ User Request → API Handler → Link Service → Repository → Database
 // API Layer (Single URL)
 CreateShortLinkHandler() → handleSingleURL() → linkService.CreateLink()
 
-// API Layer (Multiple URLs)
+// API Layer (Multiple URLs)  
 CreateShortLinkHandler() → handleMultipleURLs() → linkService.CreateLink() (for each URL)
+
+// CLI Layer (Single/Multiple URLs)
+CreateCmd.Run() → parseURLFlag() → linkService.CreateLink() (for each URL)
 
 // Service Layer  
 linkService.CreateLink() → GenerateShortCode() → linkRepo.GetLinkByShortCode() → linkRepo.CreateLink()
@@ -121,7 +132,7 @@ URL Access → Redirect Handler → Click Event → Channel → Workers → Data
 RedirectHandler() → linkService.GetLinkByShortCode() → Channel Send → c.Redirect()
 
 // Worker Layer
-clickWorker() → clickRepo.CreateClick()
+StartClickWorkers() → clickWorker() → clickRepo.CreateClick()
 
 // Repository Layer
 clickRepo.CreateClick() → db.Create()
@@ -164,29 +175,66 @@ type ClickEvent struct {
 }
 ```
 
+### API Request/Response Models
+
+```go
+// CreateLinkRequest - API request body
+type CreateLinkRequest struct {
+    LongURL  string   `json:"long_url" binding:"omitempty,url"`
+    LongURLs []string `json:"long_urls" binding:"omitempty,dive,url"`
+}
+
+// CreateLinkResponse - Single link response
+type CreateLinkResponse struct {
+    ShortCode    string `json:"short_code"`
+    LongURL      string `json:"long_url"`
+    FullShortURL string `json:"full_short_url"`
+    Success      bool   `json:"success"`
+    Error        string `json:"error,omitempty"`
+}
+
+// CreateLinksResponse - Multiple links response
+type CreateLinksResponse struct {
+    Results []CreateLinkResponse `json:"results"`
+    Summary struct {
+        Total      int `json:"total"`
+        Successful int `json:"successful"`
+        Failed     int `json:"failed"`
+    } `json:"summary"`
+}
+```
+
 ## 📈 Method Call Sequences
 
-### 1. Link Creation Sequence
+### 1. Link Creation Sequence (CLI)
 
 ```
 CLI: create.go
+├── parseURLFlag() (handles JSON arrays and single URLs)
 ├── config.LoadConfig()
 ├── gorm.Open()
 ├── repository.NewLinkRepository()
 ├── services.NewLinkService()
-└── linkService.CreateLink()
-    ├── GenerateShortCode()
-    ├── linkRepo.GetLinkByShortCode() (collision check)
-    └── linkRepo.CreateLink()
+└── For each URL:
+    ├── linkService.CreateLink()
+    │   ├── GenerateShortCode()
+    │   ├── linkRepo.GetLinkByShortCode() (collision check)
+    │   └── linkRepo.CreateLink()
+    └── Display result
+```
 
+### 2. Link Creation Sequence (API)
+
+```
 API: handlers.go
 ├── CreateShortLinkHandler()
 ├── c.ShouldBindJSON()
-├── linkService.CreateLink()
+├── handleSingleURL() OR handleMultipleURLs()
+├── linkService.CreateLink() (for each URL)
 └── c.JSON() (response)
 ```
 
-### 2. URL Redirection Sequence
+### 3. URL Redirection Sequence
 
 ```
 handlers.go: RedirectHandler()
@@ -197,16 +245,19 @@ handlers.go: RedirectHandler()
 └── c.Redirect() (HTTP 302)
 
 Background Workers:
+├── StartClickWorkers() (launches worker pool)
 ├── clickWorker() (goroutine)
 ├── Range over channel
 ├── Convert ClickEvent → Click
 └── clickRepo.CreateClick()
 ```
 
-### 3. Statistics Retrieval
+### 4. Statistics Retrieval
 
 ```
 CLI: stats.go
+├── config.LoadConfig()
+├── gorm.Open()
 ├── linkService.GetLinkStats()
 ├── linkRepo.GetLinkByShortCode()
 ├── linkRepo.CountClicksByLinkID()
@@ -216,6 +267,32 @@ API: handlers.go
 ├── GetLinkStatsHandler()
 ├── linkService.GetLinkStats()
 └── c.JSON() (response)
+```
+
+### 5. Database Migration
+
+```
+CLI: migrate.go
+├── config.LoadConfig()
+├── gorm.Open()
+├── db.AutoMigrate(&models.Link{}, &models.Click{})
+└── Success message
+```
+
+### 6. Server Startup
+
+```
+server.go: RunServerCmd
+├── config.LoadConfig()
+├── gorm.Open()
+├── db.AutoMigrate()
+├── Initialize repositories and services
+├── make(chan models.ClickEvent, bufferSize)
+├── workers.StartClickWorkers()
+├── monitor.NewUrlMonitor() → go urlMonitor.Start()
+├── api.SetupRoutes()
+├── srv.ListenAndServe()
+└── Graceful shutdown handling
 ```
 
 ## 🏗️ File Relationships & Architecture
@@ -228,7 +305,7 @@ main.go
     ├── root.go (Cobra setup)
     ├── server/server.go (HTTP server + workers)
     └── cli/
-        ├── create.go (CLI link creation)
+        ├── create.go (CLI link creation with multi-URL support)
         ├── stats.go (CLI statistics)
         └── migrate.go (Database setup)
 
@@ -329,11 +406,14 @@ go build -o url-shortener
 ### CLI Usage (New Terminal Window)
 
 ```bash
-# Create a short URL
+# Create a single short URL
 ./url-shortener create --url="https://www.google.com"
 
-# Create multiple URLs
-./url-shortener create --url="https://www.google.com" --url="https://www.github.com"
+# Create multiple URLs using JSON array format
+./url-shortener create --url='["https://www.google.com", "https://www.github.com", "https://www.stackoverflow.com"]'
+
+# Create multiple URLs using single quotes (for shell compatibility)
+./url-shortener create --url="['https://www.google.com','https://www.github.com']"
 
 # Get statistics for a short code
 ./url-shortener stats --code="abc123"
@@ -411,15 +491,18 @@ curl http://localhost:8080/api/v1/links/abc123/stats
 # 1. Start server (Terminal 1)
 ./url-shortener run-server
 
-# 2. Create URL (Terminal 2)
+# 2. Create single URL (Terminal 2)
 ./url-shortener create --url="https://www.google.com"
 # Output: Code: xyz123, Full URL: http://localhost:8080/xyz123
 
-# 3. Test redirection (Browser)
+# 3. Create multiple URLs (Terminal 2)
+./url-shortener create --url='["https://www.google.com", "https://www.github.com"]'
+
+# 4. Test redirection (Browser)
 # Visit: http://localhost:8080/xyz123
 # Should redirect to https://www.google.com
 
-# 4. Check statistics (Terminal 2)
+# 5. Check statistics (Terminal 2)
 ./url-shortener stats --code="xyz123"
 # Should show: Total clicks: 1 (or more)
 ```
@@ -458,9 +541,12 @@ export ANALYTICS_WORKER_COUNT=10
 
 ## 🎯 Key Features
 
+- **Flexible CLI Input**: Support for single URLs and JSON arrays with multiple quote formats
+- **Backward Compatible API**: Maintains existing single URL format while adding multiple URL support
 - **Non-blocking Redirects**: Click tracking never delays URL redirection
 - **Collision Handling**: Automatic retry for duplicate short codes
 - **Health Monitoring**: Periodic URL accessibility checking
 - **Graceful Shutdown**: Clean termination of background processes
 - **Configurable**: Environment variables and YAML configuration
 - **Scalable**: Worker pool pattern for high-volume click processing
+- **Comprehensive Error Handling**: Detailed error messages and partial success support
