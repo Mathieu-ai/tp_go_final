@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log"
 
-	cmd2 "github.com/axellelanca/urlshortener/cmd"
+	"github.com/axellelanca/urlshortener/cmd"
+	"github.com/axellelanca/urlshortener/internal/config"
 	"github.com/axellelanca/urlshortener/internal/models"
 	"github.com/spf13/cobra"
-	"gorm.io/driver/sqlite" // Driver SQLite pour GORM
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -19,24 +20,35 @@ var MigrateCmd = &cobra.Command{
 et exécute les migrations automatiques de GORM pour créer les tables 'links' et 'clicks'
 basées sur les modèles Go.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// TODO : Charger la configuration chargée globalement via cmd.cfg
+		// Charger la configuration chargée globalement via cmd.cfg
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			log.Fatalf("Échec du chargement de la configuration : %v", err)
+		}
 
-		// TODO 2: Initialiser la connexion à la base de données SQLite avec GORM.
+		db, err := gorm.Open(sqlite.Open(cfg.Database.Name), &gorm.Config{})
+		if err != nil {
+			log.Fatalf("Échec de la connexion à la base de données : %v", err)
+		}
 
 		sqlDB, err := db.DB()
 		if err != nil {
 			log.Fatalf("FATAL: Échec de l'obtention de la base de données SQL sous-jacente: %v", err)
 		}
-		// TODO Assurez-vous que la connexion est fermée après la migration.
+		defer sqlDB.Close()
 
-		// TODO 3: Exécuter les migrations automatiques de GORM.
-		// Utilisez db.AutoMigrate() et passez-lui les pointeurs vers tous vos modèles.
+		// Exécuter les migrations automatiques de GORM.
+		if err := db.AutoMigrate(&models.Link{}, &models.Click{}); err != nil {
+			log.Fatalf("Échec de la migration de la base de données : %v", err)
+		}
 
-		// Pas touche au log
 		fmt.Println("Migrations de la base de données exécutées avec succès.")
 	},
 }
 
+func init() {
+	cmd.RootCmd.AddCommand(MigrateCmd)
+}
 func init() {
 	// TODO : Ajouter la commande à RootCmd
 }

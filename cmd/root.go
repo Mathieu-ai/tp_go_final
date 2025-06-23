@@ -13,18 +13,12 @@ import (
 // Elle sera accessible à toutes les commandes Cobra.
 var Cfg *config.Config
 
-// TODO : Créer la RootCmd avec Cobra
-// Utiliser ces descriptions :
-// "Un service de raccourcissement d'URLs avec API REST et CLI"
-// `
-//'url-shortener' est une application complète pour gérer des URLs courtes.
-//Elle inclut un serveur API pour le raccourcissement et la redirection,
-//ainsi qu'une interface en ligne de commande pour l'administration.
-//
-//Utilisez 'url-shortener [command] --help' pour plus d'informations sur une commande.`
-
-// rootCmd représente la commande de base lorsque l'on appelle l'application sans sous-commande.
-// C'est le point d'entrée principal pour Cobra.
+var RootCmd = &cobra.Command{
+	Use:   "urlshortener",
+	Short: "A URL shortener application",
+	Long: `A URL shortener application that allows you to create shortened URLs,
+track click statistics, and monitor URL health.`,
+}
 
 // Execute est le point d'entrée principal pour l'application Cobra.
 // Il est appelé depuis 'main.go'.
@@ -39,17 +33,11 @@ func Execute() {
 // avant la fonction main(). Elle est utilisée ici pour initialiser Cobra
 // et ajouter toutes les sous-commandes.
 func init() {
-	// TODO Initialiser la configuration globale avec OnInitialize
+	cobra.OnInitialize(initConfig)
 
 	// IMPORTANT : Ici, nous n'appelons PAS RootCmd.AddCommand() directement
 	// pour les commandes 'server', 'create', 'stats', 'migrate'.
 	// Ces commandes s'enregistreront elles-mêmes via leur propre fonction init().
-	//
-	// Assurez-vous que tous les fichiers de commande comme
-	// 'cmd/server/server.go' et 'cmd/cli/*.go' aient bien
-	// un `import "url-shortener/cmd"`
-	// et un `func init() { cmd.RootCmd.AddCommand(MaCommandeCmd) }`
-	// C'est ce qui va faire le lien !
 }
 
 // initConfig charge la configuration de l'application.

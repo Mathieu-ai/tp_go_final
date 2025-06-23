@@ -17,6 +17,7 @@ type UrlMonitor struct {
 	interval    time.Duration             // How often to check URLs (e.g., every 30 seconds)
 	knownStates map[uint]bool             // Cache of previous URL states (ID -> accessible/not accessible)
 	mu          sync.Mutex                // Protects concurrent access to knownStates map
+	httpClient  *http.Client              // HTTP client for making requests
 }
 
 // NewUrlMonitor creates and returns a new instance of UrlMonitor.
@@ -25,7 +26,8 @@ func NewUrlMonitor(linkRepo repository.LinkRepository, interval time.Duration) *
 	return &UrlMonitor{
 		linkRepo:    linkRepo,
 		interval:    interval,
-		knownStates: make(map[uint]bool), // Initialize empty state map
+		knownStates: make(map[uint]bool),                     // Initialize empty state map
+		httpClient:  &http.Client{Timeout: 10 * time.Second}, // Initialize HTTP client with timeout
 	}
 }
 
