@@ -64,6 +64,7 @@ puis lance le serveur HTTP.`,
 
 		// Initialiser le channel ClickEventsChannel (api/handlers) des événements de clic et lancer les workers (StartClickWorkers).
 		clickEventsChan := make(chan models.ClickEvent, cfg.Analytics.BufferSize)
+		api.ClickEventsChannel = clickEventsChan // Set the global channel
 		workers.StartClickWorkers(cfg.Analytics.WorkerCount, clickEventsChan, clickRepo)
 
 		// Remplacer les XXX par les bonnes variables

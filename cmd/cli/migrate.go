@@ -49,6 +49,3 @@ basées sur les modèles Go.`,
 func init() {
 	cmd.RootCmd.AddCommand(MigrateCmd)
 }
-func init() {
-	// TODO : Ajouter la commande à RootCmd
-}
