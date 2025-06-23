@@ -15,71 +15,90 @@ import (
 	"gorm.io/gorm"
 )
 
+// longURLFlag stores the URL provided by the user via the --url flag
 var longURLFlag string
 
-// CreateCmd représente la commande 'create'
+// CreateCmd represents the 'create' command for the CLI application
+// This command allows users to create shortened URLs from long URLs via command line
 var CreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Crée une URL courte à partir d'une URL longue.",
-	Long: `Cette commande raccourcit une URL longue fournie et affiche le code court généré.
+	Short: "Creates a short URL from a long URL.",
+	Long: `This command shortens a provided long URL and displays the generated short code.
 
-Exemple:
+Example:
   url-shortener create --url="https://www.google.com/search?q=go+lang"`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Valider que le flag --url a été fourni.
+		// Validate that the --url flag has been provided
+		// This is a safety check even though we mark the flag as required
 		if longURLFlag == "" {
 			fmt.Println("Error: --url flag is required")
 			os.Exit(1)
 		}
 
-		// Validation basique du format de l'URL
+		// Basic validation of URL format using Go's standard url package
+		// This ensures the provided string is a valid URI before processing
 		_, err := url.ParseRequestURI(longURLFlag)
 		if err != nil {
 			fmt.Printf("Error: Invalid URL format: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Charger la configuration
+		// Load application configuration from config file or environment variables
+		// This gives us database settings, server settings, etc.
 		cfg, err := config.LoadConfig()
 		if err != nil {
 			log.Fatalf("Failed to load configuration: %v", err)
 		}
 
+		// Initialize database connection using GORM with SQLite driver
+		// The database file name comes from the loaded configuration
 		db, err := gorm.Open(sqlite.Open(cfg.Database.Name), &gorm.Config{})
 		if err != nil {
 			log.Fatalf("Failed to connect to database: %v", err)
 		}
 
+		// Get the underlying SQL database connection for proper cleanup
+		// This is necessary to close the connection when we're done
 		sqlDB, err := db.DB()
 		if err != nil {
-			log.Fatalf("FATAL: Échec de l'obtention de la base de données SQL sous-jacente: %v", err)
+			log.Fatalf("FATAL: Failed to get underlying SQL database: %v", err)
 		}
-		defer sqlDB.Close()
+		defer sqlDB.Close() // Ensure database connection is closed when function exits
 
-		// Initialiser les repositories et services nécessaires
+		// Initialize the repository layer for database operations
+		// This abstracts the database operations behind an interface
 		linkRepo := repository.NewLinkRepository(db)
+
+		// Initialize the service layer with business logic
+		// This handles the actual URL shortening logic and validation
 		linkService := services.NewLinkService(linkRepo)
 
-		// Appeler le LinkService pour créer le lien court.
+		// Call the LinkService to create the shortened link
+		// This will generate a unique short code and store it in the database
 		link, err := linkService.CreateLink(longURLFlag)
 		if err != nil {
 			log.Fatalf("Failed to create short link: %v", err)
 		}
 
+		// Build the full shortened URL using the base URL from configuration
+		// This gives users the complete URL they can share
 		fullShortURL := fmt.Sprintf("%s/%s", cfg.Server.BaseURL, link.ShortCode)
-		fmt.Printf("URL courte créée avec succès:\n")
+
+		// Display the results to the user in a friendly format
+		fmt.Printf("Short URL created successfully:\n")
 		fmt.Printf("Code: %s\n", link.ShortCode)
-		fmt.Printf("URL complète: %s\n", fullShortURL)
+		fmt.Printf("Full URL: %s\n", fullShortURL)
 	},
 }
 
 func init() {
-	// Définir le flag --url pour la commande create.
+	// Define the --url flag for the create command
+	// This flag is required and stores the long URL to be shortened
 	CreateCmd.Flags().StringVar(&longURLFlag, "url", "", "The long URL to shorten")
 
-	// Marquer le flag comme requis
+	// Mark the flag as required - Cobra will enforce this
 	CreateCmd.MarkFlagRequired("url")
 
-	// Ajouter la commande à RootCmd
+	// Add this command to the root command so it can be executed
 	cmd.RootCmd.AddCommand(CreateCmd)
 }

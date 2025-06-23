@@ -23,99 +23,115 @@ import (
 	"gorm.io/gorm"
 )
 
-// RunServerCmd représente la commande 'run-server' de Cobra.
-// C'est le point d'entrée pour lancer le serveur de l'application.
+// RunServerCmd represents the 'run-server' Cobra command
+// This is the entry point for launching the application server
 var RunServerCmd = &cobra.Command{
 	Use:   "run-server",
-	Short: "Lance le serveur API de raccourcissement d'URLs et les processus de fond.",
-	Long: `Cette commande initialise la base de données, configure les APIs,
-démarre les workers asynchrones pour les clics et le moniteur d'URLs,
-puis lance le serveur HTTP.`,
+	Short: "Launches the URL shortening API server and background processes.",
+	Long: `This command initializes the database, configures the APIs,
+starts asynchronous workers for click tracking and URL monitoring,
+then launches the HTTP server.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Charger la configuration
+		// Load application configuration from files or environment variables
+		// This contains all settings for database, server, analytics, and monitoring
 		cfg, err := config.LoadConfig()
 		if err != nil {
-			log.Fatalf("Échec du chargement de la configuration : %v", err)
+			log.Fatalf("Failed to load configuration: %v", err)
 		}
 
-		// Initialiser la base de données
+		// Initialize database connection using GORM with SQLite
+		// GORM provides an ORM layer over the raw database operations
 		db, err := gorm.Open(sqlite.Open(cfg.Database.Name), &gorm.Config{})
 		if err != nil {
-			log.Fatalf("Échec de la connexion à la base de données : %v", err)
+			log.Fatalf("Failed to connect to database: %v", err)
 		}
 
-		// Migration automatique des modèles
+		// Automatic migration of database models to create/update tables
+		// This ensures the database schema matches our Go structs
 		if err := db.AutoMigrate(&models.Link{}, &models.Click{}); err != nil {
-			log.Fatalf("Échec de la migration de la base de données : %v", err)
+			log.Fatalf("Failed to migrate database: %v", err)
 		}
 
-		// Initialiser les repositories
+		// Initialize repository layer for data access
+		// Repositories abstract database operations behind interfaces
 		linkRepo := repository.NewLinkRepository(db)
 		clickRepo := repository.NewClickRepository(db)
 
-		// Laissez le log
-		log.Println("Repositories initialisés.")
+		// Log successful repository initialization for debugging
+		log.Println("Repositories initialized.")
 
-		// Initialiser les services métiers
+		// Initialize business logic services
+		// Services contain the core business logic of the application
 		linkService := services.NewLinkService(linkRepo)
 
-		// Laissez le log
-		log.Println("Services métiers initialisés.")
+		// Log successful service initialization for debugging
+		log.Println("Business services initialized.")
 
-		// Initialiser le channel ClickEventsChannel (api/handlers) des événements de clic et lancer les workers (StartClickWorkers).
+		// Initialize click events channel for asynchronous click processing
+		// This channel decouples URL redirection from click recording for better performance
 		clickEventsChan := make(chan models.ClickEvent, cfg.Analytics.BufferSize)
-		api.ClickEventsChannel = clickEventsChan // Set the global channel
+		api.ClickEventsChannel = clickEventsChan // Set the global channel used by handlers
+
+		// Start worker goroutines to process click events asynchronously
+		// Workers run in background and save click data to database
 		workers.StartClickWorkers(cfg.Analytics.WorkerCount, clickEventsChan, clickRepo)
 
-		// Remplacer les XXX par les bonnes variables
-		log.Printf("Channel d'événements de clic initialisé avec un buffer de %d. %d worker(s) de clics démarré(s).",
+		// Log the initialization of click processing system
+		log.Printf("Click events channel initialized with buffer size %d. %d click worker(s) started.",
 			cfg.Analytics.BufferSize, cfg.Analytics.WorkerCount)
 
-		// Initialiser et lancer le moniteur d'URLs.
+		// Initialize and start the URL health monitoring system
+		// This periodically checks if shortened URLs are still accessible
 		monitorInterval := time.Duration(cfg.Monitor.IntervalMinutes) * time.Minute
 		urlMonitor := monitor.NewUrlMonitor(linkRepo, monitorInterval)
-		go urlMonitor.Start()
-		log.Printf("Moniteur d'URLs démarré avec un intervalle de %v.", monitorInterval)
+		go urlMonitor.Start() // Run monitor in background goroutine
+		log.Printf("URL monitor started with interval of %v.", monitorInterval)
 
-		// Configurer le routeur Gin et les handlers API.
+		// Configure Gin router and API handlers
+		// Gin is the HTTP framework used for routing and middleware
 		router := gin.Default()
 		api.SetupRoutes(router, linkService, cfg.Analytics.BufferSize)
 
-		// Pas toucher au log
-		log.Println("Routes API configurées.")
+		// Log successful API route configuration
+		log.Println("API routes configured.")
 
-		// Créer le serveur HTTP Gin
+		// Create HTTP server instance with Gin router
+		// This prepares the server but doesn't start it yet
 		serverAddr := fmt.Sprintf(":%d", cfg.Server.Port)
 		srv := &http.Server{
 			Addr:    serverAddr,
 			Handler: router,
 		}
 
-		// Démarrer le serveur Gin dans une goroutine anonyme pour ne pas bloquer.
+		// Start the HTTP server in a separate goroutine to avoid blocking
+		// This allows the main goroutine to handle shutdown signals
 		go func() {
-			log.Printf("Démarrage du serveur sur %s", serverAddr)
+			log.Printf("Starting server on %s", serverAddr)
 			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("Échec du démarrage du serveur : %v", err)
+				log.Fatalf("Failed to start server: %v", err)
 			}
 		}()
 
-		// Gére l'arrêt propre du serveur (graceful shutdown).
-		// Créez un channel pour les signaux OS (SIGINT, SIGTERM).
+		// Handle graceful shutdown of the server
+		// Create a channel to receive OS signals (Ctrl+C, SIGTERM)
 		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM) // Attendre Ctrl+C ou signal d'arrêt
+		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM) // Listen for interrupt signals
 
-		// Bloquer jusqu'à ce qu'un signal d'arrêt soit reçu.
+		// Block until a shutdown signal is received
+		// This keeps the main goroutine alive while the server runs
 		<-quit
-		log.Println("Signal d'arrêt reçu. Arrêt du serveur...")
+		log.Println("Shutdown signal received. Stopping server...")
 
-		// Arrêt propre du serveur HTTP avec un timeout.
-		log.Println("Arrêt en cours... Donnez un peu de temps aux workers pour finir.")
+		// Graceful shutdown with timeout for workers to finish
+		// Give background workers time to complete their current tasks
+		log.Println("Shutting down... Giving workers time to finish.")
 		time.Sleep(5 * time.Second)
 
-		log.Println("Serveur arrêté proprement.")
+		log.Println("Server stopped gracefully.")
 	},
 }
 
 func init() {
+	// Register this command with the root command so it can be executed
 	cmd.RootCmd.AddCommand(RunServerCmd)
 }

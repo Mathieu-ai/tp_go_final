@@ -9,10 +9,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// cfg est la variable globale qui contiendra la configuration chargée.
-// Elle sera accessible à toutes les commandes Cobra.
+// Cfg is the global variable that will contain the loaded configuration
+// It will be accessible to all Cobra commands throughout the application
 var Cfg *config.Config
 
+// RootCmd is the base command for the CLI application
+// All other commands (create, run-server, stats, migrate) are added as subcommands
 var RootCmd = &cobra.Command{
 	Use:   "urlshortener",
 	Short: "A URL shortener application",
@@ -20,38 +22,43 @@ var RootCmd = &cobra.Command{
 track click statistics, and monitor URL health.`,
 }
 
-// Execute est le point d'entrée principal pour l'application Cobra.
-// Il est appelé depuis 'main.go'.
+// Execute is the main entry point for the Cobra application
+// It is called from 'main.go' and handles command execution and error handling
 func Execute() {
 	if err := RootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Erreur lors de l'exécution de la commande: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error executing command: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// init() est une fonction spéciale de Go qui s'exécute automatiquement
-// avant la fonction main(). Elle est utilisée ici pour initialiser Cobra
-// et ajouter toutes les sous-commandes.
+// init() is a special Go function that executes automatically before main()
+// It's used here to initialize Cobra and set up command initialization hooks
 func init() {
+	// Set up configuration initialization to run before any command executes
+	// This ensures configuration is loaded before any command needs it
 	cobra.OnInitialize(initConfig)
 
-	// IMPORTANT : Ici, nous n'appelons PAS RootCmd.AddCommand() directement
-	// pour les commandes 'server', 'create', 'stats', 'migrate'.
-	// Ces commandes s'enregistreront elles-mêmes via leur propre fonction init().
+	// IMPORTANT: We don't call RootCmd.AddCommand() directly here
+	// for commands like 'server', 'create', 'stats', 'migrate'.
+	// These commands register themselves via their own init() functions.
+	// This design allows for better modularity and prevents import cycles.
 }
 
-// initConfig charge la configuration de l'application.
-// Cette fonction est appelée au début de l'exécution de chaque commande Cobra
-// grâce à `cobra.OnInitialize(initConfig)`.
+// initConfig loads the application configuration
+// This function is called at the beginning of every Cobra command execution
+// thanks to `cobra.OnInitialize(initConfig)` set up above
 func initConfig() {
 	var err error
+
+	// Load configuration from file, environment variables, and defaults
+	// The config package handles the precedence and fallback logic
 	Cfg, err = config.LoadConfig()
 	if err != nil {
-		// Loggue l'erreur mais ne fait pas un os.Exit(1) ici si LoadConfig()
-		// gère déjà l'absence de fichier avec des valeurs par défaut.
-		// Si LoadConfig() termine le programme en cas d'erreur fatale,
-		// cette vérification est surtout pour les avertissements.
-		log.Printf("Attention: Problème lors du chargement de la configuration: %v. Utilisation des valeurs par défaut.", err)
+		// Log warning but don't exit if LoadConfig() handles missing files gracefully
+		// If LoadConfig() terminates the program on fatal errors, this check is mainly for warnings
+		log.Printf("Warning: Problem loading configuration: %v. Using default values.", err)
 	}
-	// La configuration est maintenant disponible via la variable globale 'cmd.cfg'.
+
+	// Configuration is now available via the global variable 'cmd.Cfg'
+	// All commands can access this configuration throughout their execution
 }
