@@ -1,0 +1,30 @@
+name: Auto Rebase 'features' on master merge
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  rebase-features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0  # Important for full history and rebasing
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Rebase 'features' onto 'master'
+        run: |
+          git checkout features
+          git rebase origin/master
+          
+      - name: Push rebased 'features'
+        run: |
+          git push origin features --force-with-lease
