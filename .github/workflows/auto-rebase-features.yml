@@ -1,4 +1,4 @@
-name: Auto Rebase 'features' on master merge
+name: Sync features branch with master
 
 on:
   push:
@@ -6,54 +6,36 @@ on:
       - master
 
 jobs:
-  rebase-features:
+  sync-features:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
-          fetch-depth: 0 # Needed for full history (rebasing)
+          fetch-depth: 0
 
       - name: Configure Git
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Fetch all remote branches
+      - name: Fetch all branches
         run: |
-          git fetch --all
+          git fetch --all --prune
 
-      - name: Checkout 'features' and rebase onto 'master'
+      - name: Sync features branch with master
         run: |
+          # Checkout features branch
           git checkout features
-          git reset --hard origin/features # Make sure we're exactly tracking remote
-          git rebase origin/master
+          
+          # Merge master into features (this will bring all new additions/deletions)
+          git merge origin/master --no-edit
+          
+          # Push the updated features branch
+          git push origin features --force-with-lease
 
-      - name: Push rebased 'features'
+      - name: Report sync status
         run: |
-          # Since we're rebasing, we know we need to force push
-          # But let's be safe and check if the branch has been updated by someone else
-          git fetch origin features
-          
-          # Check if our local features branch diverges from remote
-          LOCAL_SHA=$(git rev-parse features)
-          REMOTE_SHA=$(git rev-parse origin/features)
-          
-          echo "Local features SHA: $LOCAL_SHA"
-          echo "Remote features SHA: $REMOTE_SHA"
-          
-          # If they're the same, no need to push
-          if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-            echo "No changes to push"
-          else
-            # Check if remote has new commits we don't know about
-            if git merge-base --is-ancestor origin/features features; then
-              echo "Safe to push - our branch is ahead"
-              git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force-with-lease
-            else
-              echo "Remote has changes we don't have - need to rebase again or force push"
-              echo "Using force push since this is an automated rebase workflow"
-              git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force
-            fi
-          fi
+          echo "✅ Successfully synced features branch with master"
+          echo "Features branch now contains all changes from master"
