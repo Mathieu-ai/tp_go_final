@@ -30,6 +30,9 @@ type Config struct {
 
 // Loads the application configuration using Viper.
 func LoadConfig() (*Config, error) {
+	// Enable environment variable overrides
+	viper.AutomaticEnv()
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	// Specify the path where Viper should look for config files.
 	viper.AddConfigPath("./configs")
 
