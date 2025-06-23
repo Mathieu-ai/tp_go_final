@@ -32,5 +32,28 @@ jobs:
 
       - name: Push rebased 'features'
         run: |
-          git fetch origin features  # Fetch latest state right before push
-          git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force-with-lease
+          # Since we're rebasing, we know we need to force push
+          # But let's be safe and check if the branch has been updated by someone else
+          git fetch origin features
+          
+          # Check if our local features branch diverges from remote
+          LOCAL_SHA=$(git rev-parse features)
+          REMOTE_SHA=$(git rev-parse origin/features)
+          
+          echo "Local features SHA: $LOCAL_SHA"
+          echo "Remote features SHA: $REMOTE_SHA"
+          
+          # If they're the same, no need to push
+          if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
+            echo "No changes to push"
+          else
+            # Check if remote has new commits we don't know about
+            if git merge-base --is-ancestor origin/features features; then
+              echo "Safe to push - our branch is ahead"
+              git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force-with-lease
+            else
+              echo "Remote has changes we don't have - need to rebase again or force push"
+              echo "Using force push since this is an automated rebase workflow"
+              git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force
+            fi
+          fi
