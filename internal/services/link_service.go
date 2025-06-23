@@ -1,3 +1,4 @@
+// Package services contains the business logic layer for the URL shortener application
 package services
 
 import (
@@ -8,99 +9,193 @@ import (
 	"math/big"
 	"time"
 
-	"gorm.io/gorm" // Nécessaire pour la gestion spécifique de gorm.ErrRecordNotFound
+	"gorm.io/gorm"
 
 	"github.com/axellelanca/urlshortener/internal/models"
-	"github.com/axellelanca/urlshortener/internal/repository" // Importe le package repository
+	"github.com/axellelanca/urlshortener/internal/repository"
 )
 
-// Définition du jeu de caractères pour la génération des codes courts.
+// charset defines the character set used for generating short codes.
+// Uses alphanumeric characters (both cases) for a total of 62 possible characters.
+// This gives us 62^6 = ~56 billion possible combinations for 6-character codes.
 const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-// TODO Créer la struct
-// LinkService est une structure qui g fournit des méthodes pour la logique métier des liens.
-// Elle détient linkRepo qui est une référence vers une interface LinkRepository.
-// IMPORTANT : Le champ doit être du type de l'interface (non-pointeur).
+// LinkService provides business logic methods for managing shortened links.
+// It acts as an intermediary between the HTTP handlers and the data repository.
+type LinkService struct {
+	linkRepo repository.LinkRepository // Repository interface for database operations
+}
 
-
-// NewLinkService crée et retourne une nouvelle instance de LinkService.
+// NewLinkService creates and returns a new instance of LinkService.
+// This is a constructor function following Go conventions.
 func NewLinkService(linkRepo repository.LinkRepository) *LinkService {
 	return &LinkService{
 		linkRepo: linkRepo,
 	}
 }
 
-// TODO Créer la méthode GenerateShortCode
-// GenerateShortCode est une méthode rattachée à LinkService
-// Elle génère un code court aléatoire d'une longueur spécifiée. Elle prend une longueur en paramètre et retourne une string et une erreur
-// Il utilise le package 'crypto/rand' pour éviter la prévisibilité.
-// Je vous laisse chercher un peu :) C'est faisable en une petite dizaine de ligne
+// GenerateShortCode generates a cryptographically secure random short code.
+// Parameters:
+//   - length: the desired length of the generated code
+//
+// Returns:
+//   - string: the generated random code
+//   - error: any error that occurred during generation
+func (s *LinkService) GenerateShortCode(length int) (string, error) {
+	// Create a byte slice to hold our random characters
+	code := make([]byte, length)
 
-
-// CreateLink crée un nouveau lien raccourci.
-// Il génère un code court unique, puis persiste le lien dans la base de données.
-func (s *LinkService) CreateLink(longURL string) (*models.Link, error) {
-	// TODO 1: Implémenter la logique de retry pour générer un code court unique.
-	// Essayez de générer un code, vérifiez s'il existe déjà en base, et retentez si une collision est trouvée.
-	// Limitez le nombre de tentatives pour éviter une boucle infinie.
-
-	// TODO Créer une variable shortcode pour stocker le shortcode créé
-
-	// TODO Définir un nombre maximum (5) de tentative pour trouver un code unique  (maxRetries)
-
-
-	for i := 0; i < maxRetries; i++ {
-		// TODO : Génère un code de 6 caractères (GenerateShortCode)
-
-
-		// TODO : Vérifie si le code généré existe déjà en base de données (GetLinkbyShortCode)
-		// On ignore la première valeur
-
+	// Generate each character randomly from our charset
+	for i := range code {
+		// Use crypto/rand for cryptographically secure random numbers
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
 		if err != nil {
-			// Si l'erreur est 'record not found' de GORM, cela signifie que le code est unique.
+			return "", fmt.Errorf("failed to generate random number: %w", err)
+		}
+		// Map the random number to a character from our charset
+		code[i] = charset[num.Int64()]
+	}
+	return string(code), nil
+}
+
+// CreateLink creates a new shortened link with collision detection and retry logic.
+// This method ensures that each generated short code is unique in the database.
+// Parameters:
+//   - longURL: the original URL to be shortened
+//
+// Returns:
+//   - *models.Link: the created link with its short code
+//   - error: any error that occurred during creation
+func (s *LinkService) CreateLink(longURL string) (*models.Link, error) {
+	var shortCode string
+	maxRetries := 5 // Maximum number of attempts to generate a unique code
+
+	// Retry loop to handle short code collisions
+	for i := 0; i < maxRetries; i++ {
+		// Generate a new 6-character short code
+		code, err := s.GenerateShortCode(6)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate short code: %w", err)
+		}
+
+		// Check if the generated code already exists in the database
+		_, err = s.linkRepo.GetLinkByShortCode(code)
+		if err != nil {
+			// If the error is 'record not found', the code is unique and we can use it
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				shortCode = code // Le code est unique, on peut l'utiliser
-				break            // Sort de la boucle de retry
+				shortCode = code
+				break // Exit the retry loop - we found a unique code
 			}
-			// Si c'est une autre erreur de base de données, retourne l'erreur.
+			// If it's any other database error, return it immediately
 			return nil, fmt.Errorf("database error checking short code uniqueness: %w", err)
 		}
 
-		// Si aucune erreur (le code a été trouvé), cela signifie une collision.
+		// If we reach here, the code already exists (collision detected)
 		log.Printf("Short code '%s' already exists, retrying generation (%d/%d)...", code, i+1, maxRetries)
-		// La boucle continuera pour générer un nouveau code.
 	}
 
-	// TODO : Si après toutes les tentatives, aucun code unique n'a été trouvé... Errors.New
+	// If we exhausted all retries without finding a unique code
+	if shortCode == "" {
+		return nil, errors.New("failed to generate unique short code after maximum retries")
+	}
 
+	// Create a new Link instance with the generated unique short code
+	link := &models.Link{
+		ShortCode: shortCode,
+		LongURL:   longURL,
+		CreatedAt: time.Now(), // Set creation timestamp
+	}
 
-	// TODO Crée une nouvelle instance du modèle Link.
-	link :=
+	// Persist the new link to the database via the repository layer
+	if err := s.linkRepo.CreateLink(link); err != nil {
+		return nil, fmt.Errorf("failed to create link: %w", err)
+	}
 
-	// TODO Persiste le nouveau lien dans la base de données via le repository (CreateLink)
-
-
-	// TODO Retourne le lien créé
-
+	return link, nil
 }
 
-// GetLinkByShortCode récupère un lien via son code court.
-// Il délègue l'opération de recherche au repository.
+// GetLinkByShortCode retrieves a link from the database using its short code.
+// This is the primary method used during URL redirection.
+// Parameters:
+//   - shortCode: the short code to look up
+//
+// Returns:
+//   - *models.Link: the found link
+//   - error: gorm.ErrRecordNotFound if not found, or other database errors
 func (s *LinkService) GetLinkByShortCode(shortCode string) (*models.Link, error) {
-	// TODO : Récupérer un lien par son code court en utilisant s.linkRepo.GetLinkByShortCode.
-	// Retourner le lien trouvé ou une erreur si non trouvé/problème DB.
-
+	link, err := s.linkRepo.GetLinkByShortCode(shortCode)
+	if err != nil {
+		return nil, err
+	}
+	return link, nil
 }
 
-// GetLinkStats récupère les statistiques pour un lien donné (nombre total de clics).
-// Il interagit avec le LinkRepository pour obtenir le lien, puis avec le ClickRepository
+// GetLinkStats retrieves statistics for a given short code.
+// This includes the link details and the total number of clicks recorded.
+// Parameters:
+//   - shortCode: the short code to get statistics for
+//
+// Returns:
+//   - *models.Link: the link information
+//   - int: total number of clicks
+//   - error: any error that occurred during retrieval
 func (s *LinkService) GetLinkStats(shortCode string) (*models.Link, int, error) {
-	// TODO : Récupérer le lien par son shortCode
+	// First, retrieve the link by its shortCode
+	link, err := s.linkRepo.GetLinkByShortCode(shortCode)
+	if err != nil {
+		return nil, 0, err
+	}
 
+	// Count the total number of clicks for this link's ID
+	totalClicks, err := s.linkRepo.CountClicksByLinkID(link.ID)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	// TODO 4: Compter le nombre de clics pour ce LinkID
-
-	// TODO : on retourne les 3 valeurs
-	return
+	return link, totalClicks, nil
 }
 
+// ClickService provides business logic methods for managing click events.
+// This service handles the recording and querying of user interactions with short links.
+type ClickService struct {
+	clickRepo repository.ClickRepository // Repository interface for click data operations
+}
+
+// NewClickService creates and returns a new instance of ClickService.
+// This is a constructor function following Go conventions.
+func NewClickService(clickRepo repository.ClickRepository) *ClickService {
+	return &ClickService{
+		clickRepo: clickRepo,
+	}
+}
+
+// RecordClick saves a new click event to the database.
+// This method is typically called asynchronously by worker goroutines
+// to avoid blocking the URL redirection process.
+// Parameters:
+//   - click: the click event data to record
+//
+// Returns:
+//   - error: any error that occurred during recording
+func (s *ClickService) RecordClick(click *models.Click) error {
+	if err := s.clickRepo.CreateClick(click); err != nil {
+		return fmt.Errorf("failed to record click: %w", err)
+	}
+	return nil
+}
+
+// GetClicksCountByLinkID retrieves the total number of clicks for a specific link.
+// This is used for generating statistics and analytics.
+// Parameters:
+//   - linkID: the database ID of the link to count clicks for
+//
+// Returns:
+//   - int: the total number of clicks
+//   - error: any error that occurred during counting
+func (s *ClickService) GetClicksCountByLinkID(linkID uint) (int, error) {
+	count, err := s.clickRepo.CountClicksByLinkID(linkID)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
