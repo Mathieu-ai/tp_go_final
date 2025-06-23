@@ -100,8 +100,7 @@ func (m *UrlMonitor) isUrlAccessible(url string) bool {
 	}
 
 	// Execute the HTTP request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[MONITOR] Error accessing URL '%s': %v", url, err)
 		return false
