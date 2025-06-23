@@ -1,0 +1,19 @@
+# Configuration du serveur web Gin
+server:
+  port: 8080                               # Port d'écoute du serveur HTTP
+  base_url: "http://localhost:8080"        # URL de base du service, utilisée pour construire les URLs courtes complètes
+
+# Configuration de la base de données
+database:
+  name: "url_shortener.db"                 # Nom du fichier SQLite pour la base de données
+
+# Configuration des analytics asynchrones (enregistrement des clics)
+analytics:
+  buffer_size: 1000                        # Taille du buffer pour le channel des événements de clic.
+  # Permet de gérer un pic de charge sans bloquer la redirection.
+  worker_count: 5                          # Nombre de goroutines dédiées à l'enregistrement des clics en base.
+
+# Configuration du moniteur d'URLs
+monitor:
+  interval_minutes: 5                      # Intervalle en minutes entre chaque vérification de l'état des URLs longues.
+  # Exemple: 1 pour chaque minute, 60 pour chaque heure.
