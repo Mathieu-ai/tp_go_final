@@ -18,8 +18,8 @@ import (
 	"github.com/axellelanca/urlshortener/internal/services"
 	"github.com/axellelanca/urlshortener/internal/workers"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/spf13/cobra"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 

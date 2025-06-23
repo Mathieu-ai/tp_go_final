@@ -7,8 +7,8 @@ import (
 	"github.com/axellelanca/urlshortener/cmd"
 	"github.com/axellelanca/urlshortener/internal/config"
 	"github.com/axellelanca/urlshortener/internal/models"
+	"github.com/glebarez/sqlite"
 	"github.com/spf13/cobra"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
