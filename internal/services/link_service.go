@@ -1,4 +1,3 @@
-// Package services contains the business logic layer for the URL shortener application
 package services
 
 import (
@@ -9,10 +8,10 @@ import (
 	"math/big"
 	"time"
 
-	"gorm.io/gorm"
-
+	customerrors "github.com/axellelanca/urlshortener/internal/errors"
 	"github.com/axellelanca/urlshortener/internal/models"
 	"github.com/axellelanca/urlshortener/internal/repository"
+	"gorm.io/gorm"
 )
 
 // charset defines the character set used for generating short codes.
@@ -24,6 +23,7 @@ const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 // It acts as an intermediary between the HTTP handlers and the data repository.
 type LinkService struct {
 	linkRepo repository.LinkRepository // Repository interface for database operations
+
 }
 
 // NewLinkService creates and returns a new instance of LinkService.
@@ -44,7 +44,6 @@ func NewLinkService(linkRepo repository.LinkRepository) *LinkService {
 func (s *LinkService) GenerateShortCode(length int) (string, error) {
 	// Create a byte slice to hold our random characters
 	code := make([]byte, length)
-
 	// Generate each character randomly from our charset
 	for i := range code {
 		// Use crypto/rand for cryptographically secure random numbers
@@ -94,9 +93,9 @@ func (s *LinkService) CreateLink(longURL string) (*models.Link, error) {
 		log.Printf("Short code '%s' already exists, retrying generation (%d/%d)...", code, i+1, maxRetries)
 	}
 
-	// If we exhausted all retries without finding a unique code
+	// If we exhausted all retries without finding a unique cod
 	if shortCode == "" {
-		return nil, errors.New("failed to generate unique short code after maximum retries")
+		return nil, customerrors.ErrShortCodeGenerationFailed
 	}
 
 	// Create a new Link instance with the generated unique short code
@@ -110,7 +109,6 @@ func (s *LinkService) CreateLink(longURL string) (*models.Link, error) {
 	if err := s.linkRepo.CreateLink(link); err != nil {
 		return nil, fmt.Errorf("failed to create link: %w", err)
 	}
-
 	return link, nil
 }
 
@@ -121,10 +119,13 @@ func (s *LinkService) CreateLink(longURL string) (*models.Link, error) {
 //
 // Returns:
 //   - *models.Link: the found link
-//   - error: gorm.ErrRecordNotFound if not found, or other database errors
+//   - error: ErrShortCodeNotFound if not found, or other database errors
 func (s *LinkService) GetLinkByShortCode(shortCode string) (*models.Link, error) {
 	link, err := s.linkRepo.GetLinkByShortCode(shortCode)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, customerrors.ErrShortCodeNotFound
+		}
 		return nil, err
 	}
 	return link, nil
@@ -139,10 +140,14 @@ func (s *LinkService) GetLinkByShortCode(shortCode string) (*models.Link, error)
 //   - *models.Link: the link information
 //   - int: total number of clicks
 //   - error: any error that occurred during retrieval
+
 func (s *LinkService) GetLinkStats(shortCode string) (*models.Link, int, error) {
 	// First, retrieve the link by its shortCode
 	link, err := s.linkRepo.GetLinkByShortCode(shortCode)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, customerrors.ErrShortCodeNotFound
+		}
 		return nil, 0, err
 	}
 
@@ -153,4 +158,5 @@ func (s *LinkService) GetLinkStats(shortCode string) (*models.Link, int, error) 
 	}
 
 	return link, totalClicks, nil
+
 }
