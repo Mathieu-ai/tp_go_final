@@ -1,0 +1,6 @@
+# Executable files
+url-shortener
+url-shortener.exe
+
+# Database files
+*.db
