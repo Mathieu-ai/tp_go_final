@@ -14,25 +14,28 @@ import (
 	"gorm.io/gorm"
 )
 
+var shortCodeFlag string
+
 // StatsCmd représente la commande 'stats'
 var StatsCmd = &cobra.Command{
-	Use:   "stats [short-code]",
+	Use:   "stats",
 	Short: "Get statistics for a short URL",
 	Long:  `Get click statistics for the provided short code.`,
-	Args:  cobra.ExactArgs(1),
 	Run:   runStats,
 }
 
 func init() {
+	// Définir le flag --code pour la commande stats
+	StatsCmd.Flags().StringVar(&shortCodeFlag, "code", "", "The short code to get statistics for")
+	StatsCmd.MarkFlagRequired("code")
+
 	cmd.RootCmd.AddCommand(StatsCmd)
 }
 
 // runStats exécute la logique pour la commande stats
 func runStats(cmd *cobra.Command, args []string) {
-	shortCode := args[0]
-
-	if shortCode == "" {
-		fmt.Println("Error: short code is required")
+	if shortCodeFlag == "" {
+		fmt.Println("Error: --code flag is required")
 		os.Exit(1)
 	}
 
@@ -59,10 +62,10 @@ func runStats(cmd *cobra.Command, args []string) {
 	linkService := services.NewLinkService(linkRepo)
 
 	// Appeler GetLinkStats pour récupérer le lien et ses statistiques.
-	link, totalClicks, err := linkService.GetLinkStats(shortCode)
+	link, totalClicks, err := linkService.GetLinkStats(shortCodeFlag)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			fmt.Printf("Error: Short code '%s' not found\n", shortCode)
+			fmt.Printf("Error: Short code '%s' not found\n", shortCodeFlag)
 		} else {
 			fmt.Printf("Error retrieving statistics: %v\n", err)
 		}
@@ -70,7 +73,7 @@ func runStats(cmd *cobra.Command, args []string) {
 	}
 
 	// Afficher les résultats
-	fmt.Printf("Statistiques pour le code court: %s\n", shortCode)
+	fmt.Printf("Statistiques pour le code court: %s\n", shortCodeFlag)
 	fmt.Printf("URL longue: %s\n", link.LongURL)
 	fmt.Printf("Total de clics: %d\n", totalClicks)
 	fmt.Printf("Date de création: %s\n", link.CreatedAt.Format("2006-01-02 15:04:05"))
