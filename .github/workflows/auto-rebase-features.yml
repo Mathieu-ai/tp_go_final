@@ -8,13 +8,12 @@ on:
 jobs:
   rebase-features:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
-          fetch-depth: 0  # Needed for full history (rebasing)
+          fetch-depth: 0 # Needed for full history (rebasing)
 
       - name: Configure Git
         run: |
@@ -28,9 +27,10 @@ jobs:
       - name: Checkout 'features' and rebase onto 'master'
         run: |
           git checkout features
-          git reset --hard origin/features      # Make sure we’re exactly tracking remote
+          git reset --hard origin/features # Make sure we're exactly tracking remote
           git rebase origin/master
 
       - name: Push rebased 'features'
         run: |
+          git fetch origin features  # Fetch latest state right before push
           git push https://x-access-token:${{ secrets.PAT }}@github.com/Mathieu-ai/tp_go_final.git features --force-with-lease
