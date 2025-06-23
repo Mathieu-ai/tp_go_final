@@ -1,96 +1,120 @@
 package monitor
 
 import (
+	"context"
 	"log"
 	"net/http"
-	"sync" // Pour protéger l'accès concurrentiel à knownStates
+	"sync"
 	"time"
 
-	_ "github.com/axellelanca/urlshortener/internal/models"   // Importe les modèles de liens
-	"github.com/axellelanca/urlshortener/internal/repository" // Importe le repository de liens
+	"github.com/axellelanca/urlshortener/internal/repository"
 )
 
-// UrlMonitor gère la surveillance périodique des URLs longues.
+// UrlMonitor manages periodic monitoring of long URLs to check their accessibility.
+// It maintains a state map to track URL status changes and notify when they occur.
 type UrlMonitor struct {
-	linkRepo    repository.LinkRepository // Pour récupérer les URLs à surveiller
-	interval    time.Duration             // Intervalle entre chaque vérification (ex: 5 minutes)
-	knownStates map[uint]bool             // État connu de chaque URL: map[LinkID]estAccessible (true/false)
-	mu          sync.Mutex                // Mutex pour protéger l'accès concurrentiel à knownStates
+	linkRepo    repository.LinkRepository // Repository to fetch all links from database
+	interval    time.Duration             // How often to check URLs (e.g., every 30 seconds)
+	knownStates map[uint]bool             // Cache of previous URL states (ID -> accessible/not accessible)
+	mu          sync.Mutex                // Protects concurrent access to knownStates map
 }
 
-// TODO finir cette fonction
-// NewUrlMonitor crée et retourne une nouvelle instance de UrlMonitor.
-// Attention: retourne un pointeur
+// NewUrlMonitor creates and returns a new instance of UrlMonitor.
+// interval parameter determines how frequently URLs will be checked.
 func NewUrlMonitor(linkRepo repository.LinkRepository, interval time.Duration) *UrlMonitor {
-	return
+	return &UrlMonitor{
+		linkRepo:    linkRepo,
+		interval:    interval,
+		knownStates: make(map[uint]bool), // Initialize empty state map
+	}
 }
 
-// Start lance la boucle de surveillance périodique des URLs.
-// Cette fonction est conçue pour être lancée dans une goroutine séparée.
+// Start launches the periodic URL monitoring loop.
+// This is a blocking function that runs indefinitely until the program stops.
 func (m *UrlMonitor) Start() {
-	log.Printf("[MONITOR] Démarrage du moniteur d'URLs avec un intervalle de %v...", m.interval)
-	ticker := time.NewTicker(m.interval) // Crée un ticker qui envoie un signal à chaque intervalle
-	defer ticker.Stop()                  // S'assure que le ticker est arrêté quand Start se termine
+	log.Printf("[MONITOR] Starting URL monitor with interval of %v...", m.interval)
+	ticker := time.NewTicker(m.interval)
+	defer ticker.Stop()
 
-	// Exécute une première vérification immédiatement au démarrage
+	// Execute an immediate check on startup before waiting for the first tick
 	m.checkUrls()
 
-	// Boucle principale du moniteur, déclenchée par le ticker
+	// Main monitoring loop - runs every 'interval' duration
 	for range ticker.C {
 		m.checkUrls()
 	}
 }
 
-// checkUrls effectue une vérification de l'état de toutes les URLs longues enregistrées.
+// checkUrls performs a status check on all registered long URLs.
+// It compares current state with previous state and logs any changes.
 func (m *UrlMonitor) checkUrls() {
-	log.Println("[MONITOR] Lancement de la vérification de l'état des URLs...")
+	log.Println("[MONITOR] Starting URL status verification...")
 
-	// TODO : Récupérer toutes les URLs longues actives depuis le linkRepo (GetAllLinks).
-	// Gérer l'erreur si la récupération échoue.
-	// Si erreur : log.Printf("[MONITOR] ERREUR lors de la récupération des liens pour la surveillance : %v", err)
-	links, err :=
+	// Fetch all active long URLs from the repository
+	links, err := m.linkRepo.GetAllLinks()
+	if err != nil {
+		log.Printf("[MONITOR] ERROR retrieving links for monitoring: %v", err)
+		return
+	}
 
+	// Iterate through each link and check its current accessibility
 	for _, link := range links {
-		// TODO : Pour chaque lien, vérifier son accessibilité (isUrlAccessible).
-		currentState :=
+		// Test if the URL is currently accessible via HTTP request
+		currentState := m.isUrlAccessible(link.LongURL)
 
-		// Protéger l'accès à la map 'knownStates' car 'checkUrls' peut être exécuté concurremment
+		// Thread-safe access to the state map since multiple goroutines might access it
 		m.mu.Lock()
-		previousState, exists := m.knownStates[link.ID] // Récupère l'état précédent
-		m.knownStates[link.ID] = currentState           // Met à jour l'état actuel
+		previousState, exists := m.knownStates[link.ID] // Check if we've seen this URL before
+		m.knownStates[link.ID] = currentState           // Update the state cache
 		m.mu.Unlock()
 
-		// Si c'est la première vérification pour ce lien, on initialise l'état sans notifier.
+		// If this is the first time checking this link, just log the initial state
 		if !exists {
-			log.Printf("[MONITOR] État initial pour le lien %s (%s) : %s",
+			log.Printf("[MONITOR] Initial state for link %s (%s): %s",
 				link.ShortCode, link.LongURL, formatState(currentState))
 			continue
 		}
 
-		// TODO : Comparer l'état actuel avec l'état précédent.
-		// Si l'état a changé, générer une fausse notification dans les logs.
-		// log.Printf("[NOTIFICATION] Le lien %s (%s) est passé de %s à %s !"
-
+		// Compare current state with previous state to detect changes
+		// This is where we detect if a URL went from working to broken or vice versa
+		if currentState != previousState {
+			log.Printf("[NOTIFICATION] Link %s (%s) changed from %s to %s!",
+				link.ShortCode, link.LongURL, formatState(previousState), formatState(currentState))
+		}
 	}
-	log.Println("[MONITOR] Vérification de l'état des URLs terminée.")
+	log.Println("[MONITOR] URL status verification completed.")
 }
 
-// isUrlAccessible effectue une requête HTTP HEAD pour vérifier l'accessibilité d'une URL.
+// isUrlAccessible performs an HTTP HEAD request to check if a URL is accessible.
+// Returns true if the URL responds with a successful HTTP status code (2xx or 3xx).
 func (m *UrlMonitor) isUrlAccessible(url string) bool {
-	// TODO Définir un timeout pour éviter de bloquer trop longtemps (5 secondes c'est bien)
+	// Set a timeout to prevent hanging on slow/unresponsive URLs
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// TODO: Effectuer une requête HEAD (plus légère que GET) sur l'URL.
-	// Un code de statut 2xx ou 3xx indique que l'URL est accessible.
-	// Si err : log.Printf("[MONITOR] Erreur d'accès à l'URL '%s': %v", url, err)
+	// Create HTTP HEAD request (faster than GET since we don't need the response body)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		log.Printf("[MONITOR] Error creating request for URL '%s': %v", url, err)
+		return false
+	}
 
-	// TODO Assurez-vous de fermer le corps de la réponse pour libérer les ressources
+	// Execute the HTTP request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[MONITOR] Error accessing URL '%s': %v", url, err)
+		return false
+	}
+	defer resp.Body.Close()
 
-
-	// Déterminer l'accessibilité basée sur le code de statut HTTP.
-	return resp.StatusCode >= 200 && resp.StatusCode < 400 // Codes 2xx ou 3xx
+	// Consider URLs accessible if they return 2xx (success) or 3xx (redirect) status codes
+	// 4xx (client error) and 5xx (server error) are considered inaccessible
+	return resp.StatusCode >= 200 && resp.StatusCode < 400
 }
 
-// formatState est une fonction utilitaire pour rendre l'état plus lisible dans les logs.
+// formatState is a utility function to make the state more readable in logs.
+// Converts boolean accessibility state to human-readable string.
 func formatState(accessible bool) string {
 	if accessible {
 		return "ACCESSIBLE"
