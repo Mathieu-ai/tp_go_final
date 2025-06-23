@@ -13,7 +13,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.PAT }}
+          token: ${{ secrets.PAT }}  # Use your PAT here
           fetch-depth: 0
 
       - name: Configure Git
@@ -24,7 +24,7 @@ jobs:
       - name: Rebase 'features' onto 'master'
         run: |
           git checkout features
-          git pull origin features  # Ensure it's up-to-date
+          git pull origin features
           git rebase origin/master
 
       - name: Push rebased 'features'
