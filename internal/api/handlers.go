@@ -1,4 +1,4 @@
-// internal/api/handlers.go
+
 package api
 
 import (
@@ -7,160 +7,148 @@ import (
 	"net/http"
 	"time"
 
+	customerrors "github.com/axellelanca/urlshortener/internal/errors"
 	"github.com/axellelanca/urlshortener/internal/models"
 	"github.com/axellelanca/urlshortener/internal/services"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-// ClickEventsChannel is the global channel used to send click events to background workers
-// This channel decouples URL redirection from click recording for better performance
+// ClickEventsChannel est le channel global utilisé pour envoyer les événements de clic
 var ClickEventsChannel chan models.ClickEvent
 
-// SetupRoutes configures all API routes for the Gin router and injects necessary dependencies
-// This is where we define all the HTTP endpoints and their corresponding handlers
+// SetupRoutes configure toutes les routes de l'API Gin et injecte les dépendances nécessaires
 func SetupRoutes(router *gin.Engine, linkService *services.LinkService, bufferSize int) {
-	// Initialize the click events channel if not already done
-	// This channel is used for asynchronous click event processing
+	// Initialiser le channel si ce n'est pas déjà fait
 	if ClickEventsChannel == nil {
-		ClickEventsChannel = make(chan models.ClickEvent, bufferSize)
+	ClickEventsChannel = make(chan models.ClickEvent, bufferSize)
 	}
 
-	// Health check route - used by load balancers and monitoring systems
+	// Route de Health Check
 	router.GET("/health", HealthCheckHandler)
 
-	// API routes group with version prefix for better API versioning
+	// Routes de l'API
 	api := router.Group("/api/v1")
 	{
-		// POST endpoint to create new shortened URLs
-		api.POST("/links", CreateShortLinkHandler(linkService))
-
-		// GET endpoint to retrieve statistics for a specific short code
-		api.GET("/links/:shortCode/stats", GetLinkStatsHandler(linkService))
+	api.POST("/links", CreateShortLinkHandler(linkService))
+	api.GET("/links/:shortCode/stats", GetLinkStatsHandler(linkService))
 	}
 
-	// Redirection route at root level for clean short URLs (e.g., domain.com/abc123)
-	// This must be at root level to avoid /api/v1 prefix in shortened URLs
+	// Route de Redirection (au niveau racine pour les short codes)
 	router.GET("/:shortCode", RedirectHandler(linkService))
 }
 
-// HealthCheckHandler handles the /health route for service health verification
-// Used by monitoring systems, load balancers, and orchestration platforms
+// HealthCheckHandler gère la route /health pour vérifier l'état du service.
 func HealthCheckHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// CreateLinkRequest represents the JSON request body for creating a new shortened link
-// The binding tags enable automatic validation and JSON unmarshaling
+// CreateLinkRequest représente le corps de la requête JSON pour la création d'un lien.
 type CreateLinkRequest struct {
-	LongURL string `json:"long_url" binding:"required,url"` // URL validation ensures valid format
+	LongURL string `json:"long_url" binding:"required,url"`
 }
 
-// CreateShortLinkHandler handles the creation of new shortened URLs
-// This is a factory function that returns a Gin handler with injected dependencies
+// CreateShortLinkHandler gère la création d'une URL courte.
 func CreateShortLinkHandler(linkService *services.LinkService) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var req CreateLinkRequest
+	var req CreateLinkRequest
 
-		// Attempt to bind JSON request body to our struct with automatic validation
-		// Gin will validate the URL format and required fields automatically
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
-			return
-		}
+	// Tente de lier le JSON de la requête à la structure CreateLinkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+	return
+	}
 
-		// Call the LinkService to create the new shortened link
-		// This handles business logic like generating unique codes and database storage
-		link, err := linkService.CreateLink(req.LongURL)
-		if err != nil {
-			log.Printf("Error creating link: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create short link"})
-			return
-		}
+	// Appeler le LinkService pour créer le nouveau lien
+	link, err := linkService.CreateLink(req.LongURL)
+	if err != nil {
+	if errors.Is(err, customerrors.ErrShortCodeGenerationFailed) {
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Unable to generate unique short code. Please try again later."})
+	return
+	}
+	log.Printf("Error creating link: %v", err)
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create short link"})
+	return
+	}
 
-		// Return the created link details in JSON format
-		// TODO: Use cfg.Server.BaseURL instead of hardcoded localhost
-		c.JSON(http.StatusCreated, gin.H{
-			"short_code":     link.ShortCode,
-			"long_url":       link.LongURL,
-			"full_short_url": "http://localhost:8080/" + link.ShortCode,
-		})
+	// Retourne le code court et l'URL longue dans la réponse JSON
+	c.JSON(http.StatusCreated, gin.H{
+	"short_code":     link.ShortCode,
+	"long_url":       link.LongURL,
+	"full_short_url": "http://localhost:8080/" + link.ShortCode, // TODO: Utiliser cfg.Server.BaseURL
+	})
 	}
 }
 
-// RedirectHandler handles URL redirection and asynchronous click tracking
-// This is the core functionality that makes shortened URLs work
+// RedirectHandler gère la redirection d'une URL courte vers l'URL longue et l'enregistrement asynchrone des clics.
 func RedirectHandler(linkService *services.LinkService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Extract the short code from the URL path parameter
-		shortCode := c.Param("shortCode")
+return func(c *gin.Context) {
+// Récupère le shortCode de l'URL
+shortCode := c.Param("shortCode")
 
-		// Look up the original long URL associated with this short code
-		link, err := linkService.GetLinkByShortCode(shortCode)
-		if err != nil {
-			// Handle case where short code doesn't exist in database
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
-				return
-			}
-			// Handle other potential database errors
-			log.Printf("Error retrieving link for %s: %v", shortCode, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-			return
-		}
-
-		// Create a click event with relevant information for analytics
-		// This captures user interaction data for statistics and monitoring
-		clickEvent := models.ClickEvent{
-			LinkID:    link.ID,                   // Which link was clicked
-			Timestamp: time.Now(),                // When the click occurred
-			UserAgent: c.GetHeader("User-Agent"), // Browser/client information
-			IPAddress: c.ClientIP(),              // User's IP address for analytics
-		}
-
-		// Send click event to background workers using non-blocking channel operation
-		// If channel is full, we drop the event to avoid blocking the redirect
-		select {
-		case ClickEventsChannel <- clickEvent:
-			// Click event successfully queued for processing
-		default:
-			// Channel is full, log warning but continue with redirect
-			log.Printf("Warning: ClickEventsChannel is full, dropping click event for %s.", shortCode)
-		}
-
-		// Perform HTTP 302 redirect to the original long URL
-		// This is the main functionality that users expect from a URL shortener
-		c.Redirect(http.StatusFound, link.LongURL)
-	}
+// Récupérer l'URL longue associée au shortCode
+link, err := linkService.GetLinkByShortCode(shortCode)
+if err != nil {
+// Si le lien n'est pas trouvé, retourner HTTP 404 Not Found
+if errors.Is(err, customerrors.ErrShortCodeNotFound) {
+c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
+return
+}
+// Gérer d'autres erreurs potentielles
+log.Printf("Error retrieving link for %s: %v", shortCode, err)
+c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+return
 }
 
-// GetLinkStatsHandler handles retrieving statistics for a specific shortened link
-// This provides analytics data about how many times a link has been clicked
+// Créer un ClickEvent avec les informations pertinentes
+clickEvent := models.ClickEvent{
+LinkID:    link.ID,
+Timestamp: time.Now(),
+UserAgent: c.GetHeader("User-Agent"),
+IPAddress: c.ClientIP(),
+}
+
+// Envoyer le ClickEvent dans le ClickEventsChannel avec multiplexage
+select {
+case ClickEventsChannel <- clickEvent:
+// Événement envoyé avec succès
+log.Printf("Click event queued for link %s (ID: %d)", shortCode, link.ID)
+default:
+// Channel plein, on abandonne l'événement
+log.Printf("WARNING: ClickEventsChannel is full, dropping click event for %s (ID: %d)", shortCode, link.ID)
+}
+
+// Effectuer la redirection HTTP 302 vers l'URL longue
+c.Redirect(http.StatusFound, link.LongURL)
+}
+}
+
+// GetLinkStatsHandler gère la récupération des statistiques pour un lien spécifique.
 func GetLinkStatsHandler(linkService *services.LinkService) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		// Extract the short code from the URL path parameter
-		shortCode := c.Param("shortCode")
+return func(c *gin.Context) {
+// Récupère le shortCode de l'URL
+shortCode := c.Param("shortCode")
 
-		// Call LinkService to get link details and click statistics
-		// This returns both the link information and aggregated click count
-		link, totalClicks, err := linkService.GetLinkStats(shortCode)
-		if err != nil {
-			// Handle case where the short code doesn't exist
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
-				return
-			}
-			// Handle other database or service errors
-			log.Printf("Error retrieving stats for %s: %v", shortCode, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
-			return
-		}
+// Appeler le LinkService pour obtenir le lien et le nombre total de clics
+link, totalClicks, err := linkService.GetLinkStats(shortCode)
+if err != nil {
+// Gérer le cas où le lien n'est pas trouvé
+if errors.Is(err, customerrors.ErrShortCodeNotFound) {
+c.JSON(http.StatusNotFound, gin.H{"error": "Short URL not found"})
+return
+}
+// Gérer d'autres erreurs
+log.Printf("Error retrieving stats for %s: %v", shortCode, err)
+c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+return
+}
 
-		// Return statistics in JSON format for client consumption
-		c.JSON(http.StatusOK, gin.H{
-			"short_code":   link.ShortCode,
-			"long_url":     link.LongURL,
-			"total_clicks": totalClicks,
-		})
-	}
+// Retourne les statistiques dans la réponse JSON
+c.JSON(http.StatusOK, gin.H{
+"short_code":   link.ShortCode,
+"long_url":     link.LongURL,
+"total_clicks": totalClicks,
+"created_at":   link.CreatedAt.Format("2006-01-02 15:04:05"),
+})
+}
 }
